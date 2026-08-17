@@ -82,3 +82,62 @@ func TestDuplicateDeliveryIsIgnored(t *testing.T) {
 		t.Fatalf("stored %d copies of %s, want 1", n, eventID)
 	}
 }
+
+func TestConcurrentDuplicateDeliveryIsIgnored(t *testing.T) {
+	srv, st := testutil.NewServer(t)
+	eventID, callID, accountID := testutil.IDs(t, st)
+	ctx := context.Background()
+
+	body := eventJSON(eventID, callID, accountID)
+
+	const deliveries = 10
+
+	start := make(chan struct{})
+	errs := make(chan error, deliveries)
+
+	for i := 0; i < deliveries; i++ {
+		go func() {
+			<-start
+
+			resp, err := http.Post(
+				srv.URL+"/webhooks/calls",
+				"application/json",
+				strings.NewReader(body),
+			)
+			if err != nil {
+				errs <- err
+				return
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				errs <- fmt.Errorf("got status %d, want 200", resp.StatusCode)
+				return
+			}
+
+			errs <- nil
+		}()
+	}
+
+	close(start)
+
+	for i := 0; i < deliveries; i++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("delivery %d failed: %v", i, err)
+		}
+	}
+
+	var n int
+	err := st.Pool().QueryRow(
+		ctx,
+		`SELECT count(*) FROM events WHERE event_id = $1`,
+		eventID,
+	).Scan(&n)
+	if err != nil {
+		t.Fatalf("count events: %v", err)
+	}
+
+	if n != 1 {
+		t.Fatalf("stored %d copies of %s, want 1", n, eventID)
+	}
+}
