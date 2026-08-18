@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -18,10 +19,11 @@ const recordingWork = 50 * time.Millisecond
 
 // Service ingests webhook deliveries.
 type Service struct {
-	store *store.Store
-	cache *stats.Cache
-	rdb   *redis.Client
-	log   *slog.Logger
+	store       *store.Store
+	cache       *stats.Cache
+	rdb         *redis.Client
+	log         *slog.Logger
+	recordingWG sync.WaitGroup
 }
 
 // New builds a Service.
@@ -32,6 +34,11 @@ func New(s *store.Store, c *stats.Cache, rdb *redis.Client, log *slog.Logger) *S
 // Stats returns the cached totals for an account.
 func (s *Service) Stats(accountID string) stats.AccountStats {
 	return s.cache.Get(accountID)
+}
+
+// Wait blocks until all in-flight recording processing has completed.
+func (s *Service) Wait() {
+	s.recordingWG.Wait()
 }
 
 // Ingest stores a delivery and kicks off processing. Processing runs
@@ -71,7 +78,9 @@ func (s *Service) Ingest(ctx context.Context, evt Event) error {
 
 	// Recordings are slow to fetch, so that part does not block the provider.
 	if rec.RecordingURL != "" {
+		s.recordingWG.Add(1)
 		go func() {
+			defer s.recordingWG.Done()
 			if err := s.processRecording(context.Background(), rec); err != nil {
 				s.log.Error("recording processing failed", "call_id", rec.CallID, "err", err)
 			}
