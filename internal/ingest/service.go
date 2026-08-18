@@ -72,8 +72,8 @@ func (s *Service) Ingest(ctx context.Context, evt Event) error {
 	// Recordings are slow to fetch, so that part does not block the provider.
 	if rec.RecordingURL != "" {
 		go func() {
-			if err := s.processRecording(ctx, rec); err != nil {
-				// TODO: handle
+			if err := s.processRecording(context.Background(), rec); err != nil {
+				s.log.Error("recording processing failed", "call_id", rec.CallID, "err", err)
 			}
 		}()
 	}
